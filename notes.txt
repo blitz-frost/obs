@@ -1,0 +1,8 @@
+TODO
+- replace Observer.sampleChan with a pool or shared slice of slices
+ - both of these alternatives should be faster than sending each sample through a channel
+ - would need to be balanced with the additional synchronization needed for pool/slice recirculation
+ - let user choose sizes, as well as provide good defaults
+- provide analysis functionality, to potentially allow sample processing in the same thread for light processing
+ - could be also used to discover good parameters for the target system/sample function
+- provide option for sampling only under certain conditions (ex. every N, or any other custom condition)
