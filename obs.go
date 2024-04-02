@@ -5,9 +5,9 @@ package obs
 // It gathers samples in a finite queue, and processes these samples in a dedicated goroutine.
 // If the sample queue would overflow, emits a warning and discards all subsequent samples.
 type Observer[S any, T any] struct {
-	OnFinal    func()      // called when the last sample has been processed, if non-nil
-	OnFirst    func(*S, T) // called on the first sample, before the normal sampling function, if non-nil
-	OnOverflow func()      // called when a queue overflow occurs, if non-nil
+	Final    func(*S)    // called when the last sample has been processed, if non-nil
+	First    func(*S, T) // called on the first sample, before the normal sampling function, if non-nil
+	Overflow func()      // called when a queue overflow occurs, if non-nil
 
 	state S
 
@@ -18,7 +18,7 @@ type Observer[S any, T any] struct {
 	stop     bool
 }
 
-func NewObserver[S any, T any](queueSize int, sampleFunc func(*S, T)) *Observer[S, T] {
+func ObserverMake[S any, T any](queueSize int, sampleFunc func(*S, T)) *Observer[S, T] {
 	return &Observer[S, T]{
 		sampleChan: make(chan T, queueSize),
 		sampleFunc: sampleFunc,
@@ -38,8 +38,8 @@ func Sample[S any, T any](x *Observer[S, T], v T) {
 		x.inactive = true
 		close(x.sampleChan)
 
-		if x.OnOverflow != nil {
-			x.OnOverflow()
+		if x.Overflow != nil {
+			x.Overflow()
 		}
 	}
 }
@@ -57,17 +57,19 @@ func Stop[S any, T any](x *Observer[S, T]) {
 }
 
 func loop[S any, T any](x *Observer[S, T]) {
-	if x.OnFinal != nil {
-		defer x.OnFinal()
+	if x.Final != nil {
+		defer func() {
+			x.Final(&x.state)
+		}()
 	}
 
-	if x.OnFirst != nil {
+	if x.First != nil {
 		sample, ok := <-x.sampleChan
 		if !ok {
 			return
 		}
 
-		x.OnFirst(&x.state, sample)
+		x.First(&x.state, sample)
 		x.sampleFunc(&x.state, sample)
 	}
 
