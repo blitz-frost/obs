@@ -76,7 +76,7 @@ func SamplerMake[S any, T any](queueSize int, sampleFunc func(*S, T)) *Sampler[S
 
 // Sample pushes a new sample for the Sampler to process.
 // NoOp if the Sampler is inactive (closed or has overflowed).
-func Sample[S any, T any](x *Sampler[S, T], v T) {
+func (x *Sampler[S, T]) Sample(v T) {
 	if x.inactive {
 		return
 	}
@@ -92,19 +92,19 @@ func Sample[S any, T any](x *Sampler[S, T], v T) {
 	}
 }
 
-func Start[S any, T any](x *Sampler[S, T]) {
+func (x *Sampler[S, T]) Start() {
 	x.inactive = false
-	go loop(x)
+	go x.loop()
 }
 
 // Stop terminates the active processing loop, if it exists.
 // Must be called when the Sampler is no longer needed.
-func Stop[S any, T any](x *Sampler[S, T]) {
+func (x *Sampler[S, T]) Stop() {
 	x.inactive = true
 	close(x.sampleChan)
 }
 
-func loop[S any, T any](x *Sampler[S, T]) {
+func (x *Sampler[S, T]) loop() {
 	if x.Final != nil {
 		defer func() {
 			x.Final(&x.state)
