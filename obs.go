@@ -1,133 +1,94 @@
 // Package obs provides code instrumentation.
 package obs
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // A Loader can safely obtain values for inspection.
-type Loader interface {
-	Load() any
-}
+type Loader func() any
 
 // A Map groups and provides access to a set of Values.
 //
 // Its methods are concurrent safe.
 type Map struct {
-	values map[any]Value
-	mux    sync.Mutex
+	_values map[any]Value
+	_mux    sync.Mutex
 }
 
 func MapMake() *Map {
 	return &Map{
-		values: make(map[any]Value),
+		_values: make(map[any]Value),
 	}
 }
 
 func (x *Map) Delete(key any) {
-	x.mux.Lock()
-	delete(x.values, key)
-	x.mux.Unlock()
+	x._mux.Lock()
+	delete(x._values, key)
+	x._mux.Unlock()
 }
 
 func (x *Map) Get(key any) (Value, bool) {
-	x.mux.Lock()
-	o, ok := x.values[key]
-	x.mux.Unlock()
+	x._mux.Lock()
+	o, ok := x._values[key]
+	x._mux.Unlock()
 	return o, ok
 }
 
 // Range calls the given function with the labels and loaded values of all members.
-func (x *Map) Range(fn func(string, any)) {
-	x.mux.Lock()
-	for _, v := range x.values {
-		fn(v.Label, v.Load())
+func (x *Map) Range(fn func(Value)) {
+	x._mux.Lock()
+	for _, v := range x._values {
+		fn(v)
 	}
-	x.mux.Unlock()
+	x._mux.Unlock()
 }
 
+// The key must be a comparable type.
+//
+// The Value label isn't used as a key, because that would force the user to store it, if they want to delete it later.
+// This way, a simple pointer can be used instead, for example.
 func (x *Map) Set(key any, val Value) {
-	x.mux.Lock()
-	x.values[key] = val
-	x.mux.Unlock()
+	x._mux.Lock()
+	x._values[key] = val
+	x._mux.Unlock()
 }
 
-// A Sampler accepts samples in a finite queue, and processes them in a dedicated goroutine.
-// If the sample queue would overflow, emits a warning and discards all subsequent samples.
-type Sampler[S any, T any] struct {
-	Final    func(*S)    // called when the last sample has been processed, if non-nil
-	First    func(*S, T) // called on the first sample, before the normal sampling function, if non-nil
-	Overflow func()      // called when a queue overflow occurs, if non-nil
+// A Series captures a target number of samples, once the Load() method is called.
+type Series[T any] struct {
+	Samples int // how many samples will be gathered per Load()
 
-	state S
-
-	sampleChan chan T
-	sampleFunc func(*S, T)
-
-	inactive bool
-	stop     bool
+	_values []T
+	_active atomic.Bool
+	_wait   chan struct{}
 }
 
-func SamplerMake[S any, T any](queueSize int, sampleFunc func(*S, T)) *Sampler[S, T] {
-	return &Sampler[S, T]{
-		sampleChan: make(chan T, queueSize),
-		sampleFunc: sampleFunc,
-		inactive:   true,
-	}
+// Load enables sample storing and blocks until the target number is obtained.
+// The returned value is a []T.
+//
+// Not concurrent safe with itself.
+func (x *Series[T]) Load() any {
+	x._values = make([]T, 0, x.Samples)
+	x._wait = make(chan struct{})
+	x._active.Store(true)
+
+	<-x._wait
+
+	return x._values
 }
 
-// Sample pushes a new sample for the Sampler to process.
-// NoOp if the Sampler is inactive (closed or has overflowed).
-func (x *Sampler[S, T]) Sample(v T) {
-	if x.inactive {
+// Not concurrent safe with itself.
+func (x *Series[T]) Store(v T) {
+	if !x._active.Load() {
 		return
 	}
 
-	x.sampleChan <- v
-	if x.stop {
-		x.inactive = true
-		close(x.sampleChan)
+	x._values = append(x._values, v)
 
-		if x.Overflow != nil {
-			x.Overflow()
-		}
-	}
-}
-
-func (x *Sampler[S, T]) Start() {
-	x.inactive = false
-	go x.loop()
-}
-
-// Stop terminates the active processing loop, if it exists.
-// Must be called when the Sampler is no longer needed.
-func (x *Sampler[S, T]) Stop() {
-	x.inactive = true
-	close(x.sampleChan)
-}
-
-func (x *Sampler[S, T]) loop() {
-	if x.Final != nil {
-		defer func() {
-			x.Final(&x.state)
-		}()
-	}
-
-	if x.First != nil {
-		sample, ok := <-x.sampleChan
-		if !ok {
-			return
-		}
-
-		x.First(&x.state, sample)
-		x.sampleFunc(&x.state, sample)
-	}
-
-	for sample := range x.sampleChan {
-		x.sampleFunc(&x.state, sample)
-
-		if len(x.sampleChan) == cap(x.sampleChan) {
-			// we have reached overflow
-			x.stop = true
-		}
+	if len(x._values) == cap(x._values) {
+		x._active.Store(false)
+		close(x._wait)
 	}
 }
 
